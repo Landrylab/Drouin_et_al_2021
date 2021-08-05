@@ -1,0 +1,238 @@
+### Bash code used to performed the differential expression analysis of DS1 and DS2 ###
+### The section numbers are the same as the ones in Materials and methods section
+
+### Analysis of DS1 ###
+
+### 2.1 Download RNAseq data of Schraiber et al. 2013 ###
+cd /home/madro269/sratoolkit.2.10.9-ubuntu64/bin 
+parallel "fastq-dump -I --split-files {} -O /home/madro269/schraiber2013/raw_data" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR515224 SRR515225 SRR515226 SRR515227 SRR515228 SRR515229 SRR515230 SRR515231 SRR835213 SRR835214 SRR835215 SRR835216 SRR835217 SRR835218
+
+### 2.2 Quality control and data filtering ###
+# 2.2.1 Quality control
+# fastqc
+find /home/madro269/schraiber2013/raw_data/ -name "*.fastq" | parallel /prg/FastQC/0.11.8/fastqc -o /home/users/madro269/schraiber2013/fastqc  
+# multiqc
+module load python/3.7 multiqc/1.9
+cd schraiber2013/fastqc/ 
+/prg/python/3.7/bin/multiqc .    
+
+# 2.2.2 Filtering with the ShortRead R package to only keep read pairs where one of the reads has two or more T nucleotides at the 5’ end
+#Output files were transfered in polyT_filtered_data folder
+ 
+# 2.2.3 Adaptor trimming  
+for infile in /home/madro269/schraiber2013/polyT_filtered_data/*_1_polyT-filtered.fastq 
+do
+  base=$(basename ${infile} _1_polyT-filtered.fastq) 
+  java -jar /prg/trimmomatic/0.36/trimmomatic-0.36.jar PE -phred33 ${infile} /home/madro269/schraiber2013/polyT_filtered_data/${base}_2_polyT-filtered.fastq /home/madro269/schraiber2013/trim_polyT_filtered_data/${base}_1_polyT-filtered.trim.fastq /home/madro269/schraiber2013/trim_polyT_filtered_data/${base}_1_polyT-filtered_unpaired.trim.fastq /home/madro269/schraiber2013/trim_polyT_filtered_data/${base}_2_polyT-filtered.trim.fastq /home/madro269/schraiber2013/trim_polyT_filtered_data/${base}_2_polyT-filtered_unpaired.trim.fastq ILLUMINACLIP:/prg/trimmomatic/0.36/adapters/TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:25
+done
+#Fastqc and multiqc were done on output files
+
+### 2.4 Preparation of reference genome sequences and annotations ###
+### 2.4.1 Genome sequences ###
+# Detect and mask interspersed repeats and low complexity DNA sequences (including TEs) by replacing them by Ns with RepeatMasker and our custom library of representative internal and LTR sequences of each Ty family library found in parental species ####
+cd /prg/RepeatMasker/4.1.0/ 
+srun --pty RepeatMasker --html --gff --lib /home/madro269/schraiber2013/seq_ref/TEs_cer_par_bay.fa /home/madro269/schraiber2013/genome/Scer.fasta --dir /home/madro269/schraiber2013/repeatmasker
+srun --pty RepeatMasker --html --gff --lib /home/madro269/schraiber2013/seq_ref/TEs_cer_par_bay.fa /home/madro269/schraiber2013/genome/Spar.fasta --dir /home/madro269/schraiber2013/repeatmasker
+srun --pty RepeatMasker --html --gff --lib /home/madro269/schraiber2013/seq_ref/TEs_cer_par_bay.fa /home/madro269/schraiber2013/genome/Sbay.fasta --dir /home/madro269/schraiber2013/repeatmasker
+
+# Creation of concatenated hybrid reference genomes containing our custom Ty library
+cat /home/madro269/schraiber2013/genome/Scer.fasta.masked /home/madro269/schraiber2013/genome/Sbay.fasta.masked > /home/madro269/schraiber2013/genome/Scer.Sbay.masked.concatenated.TEs.fasta
+cat /home/madro269/schraiber2013/genome/Scer.fasta.masked /home/madro269/schraiber2013/genome/Spar.fasta.masked > /home/madro269/schraiber2013/genome/Scer.Spar.masked.concatenated.TEs.fasta
+# The second copy of Ty reference sequences were removed manually 
+
+# Format the .fasta files for visualisation in IGV : 50pb per lines
+cd /prg/picard-tools/2.23.2
+java -jar picard.jar NormalizeFasta I=/home/madro269/schraiber2013/genome/Scer.Sbay.masked.concatenated.TEs.conc.fasta O=/home/madro269/schraiber2013/genome/Scer.Sbay.masked.concatenated.TEs.conc.normalize.fasta LINE_LENGTH=50 
+java -jar picard.jar NormalizeFasta I=/home/madro269/schraiber2013/genome/Scer.Spar.masked.concatenated.TEs.conc.fasta O=/home/madro269/schraiber2013/genome/Scer.Spar.masked.concatenated.TEs.conc.normalize.fasta LINE_LENGTH=50 
+
+### 2.4.2 Genome annotations ###
+#Conversion of gff files to gtf files appropriated to the rest of the analysis with the code in GFF_GTF_conversion.txt file found at https://github.com/Gabaldonlab/Hybrid_project
+#S. cerevisiae
+sed "s/ Zill /_Zill_/g" /home/madro269/schraiber2013/genome/Scer.gff | sed "s/ORF/CDS/g" | sed "s/pseudogene/CDS/g" | sed "s/tRNA/CDS/g" | sed "s/dispersed repeat/CDS/" | sed "s/intergenic region/CDS/g"| sed "s/sequence feature/CDS/g" >/home/madro269/schraiber2013/genome/Scer_rebuilt.gff
+cd gffread
+srun --pty gffread /home/madro269/schraiber2013/genome/Scer_rebuilt.gff -T -o /home/madro269/schraiber2013/genome/Scer.gtf 
+sed "s/gene_name/gene_id/g" /home/madro269/schraiber2013/genome/Scer.gtf | sed "s/CDS/exon/g" > /home/madro269/schraiber2013/genome/Scer_rebuilt.gtf
+
+#S. paradoxus 
+sed "s/ Zill /_Zill_/g" /home/madro269/schraiber2013/genome/Spar.gff | sed "s/ORF/CDS/g" | sed "s/pseudogene/CDS/g" | sed "s/tRNA/CDS/g" | sed "s/dispersed repeat/CDS/" | sed "s/intergenic region/CDS/g"| sed "s/sequence feature/CDS/g" >/home/madro269/schraiber2013/genome/Spar_rebuilt.gff
+cd gffread
+srun --pty gffread /home/madro269/schraiber2013/genome/Spar_rebuilt.gff -T -o /home/madro269/schraiber2013/genome/Spar.gtf 
+sed "s/gene_name/gene_id/g" /home/madro269/schraiber2013/genome/Spar.gtf | sed "s/CDS/exon/g" > /home/madro269/schraiber2013/genome/Spar_rebuilt.gtf
+
+# S. uvarum 
+sed "s/ Zill /_Zill_/g" /home/madro269/schraiber2013/genome/Sbay.gff | sed "s/ORF/CDS/g" | sed "s/pseudogene/CDS/g" | sed "s/tRNA/CDS/g" | sed "s/dispersed repeat/CDS/" | sed "s/intergenic region/CDS/g"| sed "s/sequence feature/CDS/g" >/home/madro269/schraiber2013/genome/Sbay_rebuilt.gff
+cd gffread
+srun --pty gffread /home/madro269/schraiber2013/genome/Sbay_rebuilt.gff -T -o /home/madro269/schraiber2013/genome/Sbay.gtf 
+sed "s/gene_name/gene_id/g" /home/madro269/schraiber2013/genome/Sbay.gtf | sed "s/CDS/exon/g" > /home/madro269/schraiber2013/genome/Sbay_rebuilt.gtf
+
+#In .gtf files, chromosome names were replaced manually to distinguish chromosome from different species: ex 1 -> Scer_1 or 1 -> Spar_1 
+
+# Creation of gtf annotation files for concatenated hybrid genomes
+cat /home/madro269/schraiber2013/genome/Scer_rebuilt.gtf /home/madro269/schraiber2013/genome/Sbay_rebuilt.gtf > /home/madro269/schraiber2013/genome/Scer.Sbay.rebuilt.TEs.gtf
+cat /home/madro269/schraiber2013/genome/Scer_rebuilt.gtf /home/madro269/schraiber2013/genome/Spar_rebuilt.gtf > /home/madro269/schraiber2013/genome/Scer.Spar.rebuilt.TEs.gtf
+
+# Ty internal and 3' LTR sequences concatenated sequences were added manually to create the files: Scer.Sbay.rebuilt.TEs.conc.gtf and Scer.Spar.rebuilt.TEs.conc.gtf
+
+
+### 2.5 RNA-seq mapping with Bowtie2 ####
+# 2.5.1 Alignment 
+# S. cerevisiae x S. uvarum
+# Index creation for Bowtie2
+cd /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc
+/prg/bowtie/2.3.4.1/bowtie2-build /home/madro269/schraiber2013/genome/Scer.Sbay.masked.concatenated.TEs.conc.normalize.fasta Scer_Sbay
+
+cd /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc
+parallel "/prg/bowtie/2.3.4.1/bowtie2 --local -x Scer_Sbay -1 /home/madro269/schraiber2013/trim_polyT_filtered_data/{}_1_polyT-filtered.trim.fastq -2 /home/madro269/schraiber2013/trim_polyT_filtered_data/{}_2_polyT-filtered.trim.fastq -S {}.sam" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+parallel "/prg/samtools/1.8/bin/samtools view -bS {}.sam > {}.bam" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+
+# S. cerevisiae x S. paradoxus
+cd /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc
+/prg/bowtie/2.3.4.1/bowtie2-build /home/madro269/schraiber2013/genome/Scer.Spar.masked.concatenated.TEs.conc.normalize.fasta Scer_Spar
+
+cd /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc
+parallel "/prg/bowtie/2.3.4.1/bowtie2 --local -x Scer_Spar -1 /home/madro269/schraiber2013/trim_polyT_filtered_data/{}_1_polyT-filtered.trim.fastq -2 /home/madro269/schraiber2013/trim_polyT_filtered_data/{}_2_polyT-filtered.trim.fastq -S {}.sam" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+parallel "/prg/samtools/1.8/bin/samtools view -bS {}.sam > {}.bam" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+
+
+# 2.5.2 Selection of pairs for which the first read mapped inside an internal sequence to exclude spurious transcription from solo LTRs
+
+# 2.5.2.1 S. cerevisiae x S. uvarum
+cd /prg/samtools/1.8/bin/ 
+parallel "srun --pty samtools sort /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/{}.bam -o /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}.sorted.bam" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218 
+
+# Index .sorted.bam files  
+parallel "srun --pty samtools index /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}.sorted.bam" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+
+# Select the first read of read mapped in proper pairs with -f 67 option and -h option (include header in output file)  
+parallel 'srun --pty samtools view -f 67 -h /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}.sorted.bam "TY1-I-LTR-cer:1-5249" "TY2-I-LTR-cer:1-5295" "TY3-I-LTR-cer:1-4671" "TY4-I-LTR-cer:1-5484" "TY5-I-LTR-cer:1-4874" "TY3-I-LTR-par:1-4674" "Tsu4-I-LTR-bay:1-5453" > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_TY.sorted.bam' ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+
+# Create a file with the reads_names of pairs having their first read in the Ty internal sequence 
+parallel "srun --pty samtools view /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_TY.sorted.bam | cut -f1 | sort | uniq > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_read_names" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+
+# Create a file with both reads of selecte pairs 
+cd /prg/picard-tools/2.23.2
+parallel "java -jar picard.jar FilterSamReads I=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}.sorted.bam O=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_TY.tot.sorted.bam READ_LIST_FILE=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_read_names FILTER=includeReadList" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+
+# Same process as Ty to select read mapped in proper pairs for other chromosomes in the genome énomes 
+cd /prg/samtools/1.8/bin/
+parallel 'srun --pty samtools view -f 67 -h /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}.sorted.bam Scer_1 Scer_2	Scer_3	Scer_4	Scer_5	Scer_6	Scer_7	Scer_8	Scer_9	Scer_10	Scer_11	Scer_12	Scer_13	Scer_14	Scer_15	Scer_16	Sbay_1	Sbay_2	Sbay_3	Sbay_4	Sbay_5	Sbay_6	Sbay_7 Sbay_8	Sbay_9	Sbay_10	Sbay_11	Sbay_12	Sbay_13	Sbay_14	Sbay_15	Sbay_16	Sbay_17	Sbay_18	Sbay_19	Sbay_20	Sbay_21	Sbay_22	Sbay_23	
+Sbay_24	Sbay_25	Sbay_26	Sbay_27	Sbay_28	Sbay_29	Sbay_30	Sbay_31	Sbay_32	Sbay_33	Sbay_34	Sbay_35	Sbay_36	Sbay_37	Sbay_38	Sbay_39	Sbay_40	Sbay_41	Sbay_42	Sbay_43	Sbay_44	Sbay_45	Sbay_46	Sbay_47	Sbay_48	Sbay_49	Sbay_50	Sbay_51	Sbay_52	Sbay_53	Sbay_54	Sbay_55	Sbay_56	Sbay_57	Sbay_58	Sbay_59	Sbay_60	Sbay_61	Sbay_62	Sbay_63	Sbay_64	Sbay_65	Sbay_66	Sbay_67	Sbay_68	Sbay_69	Sbay_70	Sbay_71	Sbay_72	Sbay_73	Sbay_74	Sbay_75	Sbay_76	Sbay_77	Sbay_78	
+Sbay_79	Sbay_80	Sbay_81	Sbay_82	Sbay_83	Sbay_84	Sbay_85	Sbay_86	Sbay_87	Sbay_88	Sbay_89	Sbay_90	Sbay_91	Sbay_92	Sbay_93	Sbay_94	Sbay_95	Sbay_96	Sbay_97	Sbay_98	Sbay_99	Sbay_100 Sbay_101 Sbay_102 Sbay_103 Sbay_104 Sbay_105 Sbay_106 Sbay_107 Sbay_108 Sbay_109 Sbay_110 Sbay_111 Sbay_112 Sbay_113 Sbay_114 > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_rest2.sorted.bam' ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+parallel "srun --pty samtools view /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_rest2.sorted.bam | cut -f1 | sort | uniq > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_rest2_read_names" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+cd /prg/picard-tools/2.23.2
+parallel "java -jar picard.jar FilterSamReads I=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}.sorted.bam O=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_rest2.tot.sorted.bam READ_LIST_FILE=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_rest2_read_names FILTER=includeReadList" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+
+# Combine the 2 files
+parallel "java -jar picard.jar GatherBamFiles I=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_rest2.tot.sorted.bam I=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_TY.tot.sorted.bam O=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_gathered2.TY.sorted.bam" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+
+# Verify that any alignment flagged as secondary is excluded from downstream analyses
+parallel "srun --pty samtools view -F 256 /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV2/{}_gathered2.TY.sorted.bam > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV3/{}_gathered3.TY.sorted.bam" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214 
+
+# Creation of bed files to coverage uniformity visualisation
+cd /prg/samtools/1.8/bin/ 
+parallel "srun --pty samtools index /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_TY.tot.sorted.bam" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+parallel "srun --pty samtools depth -a /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_TY.tot.sorted.bam > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_TY.tot.sorted.bed" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+parallel "srun --pty samtools index /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_gathered2.TY.sorted.bam" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+parallel "srun --pty samtools depth -a /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_gathered2.TY.sorted.bam > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_bay_conc/IGV/{}_gathered2.TY.sorted.bed" ::: SRR515228 SRR515229 SRR515230 SRR515231 SRR835217 SRR835218
+
+# 2.5.2.2 S. cerevisiae x S. paradoxus
+# The annotations are not detailed since 5.2.2 section contain the same steps as 5.2.1 section
+cd /prg/samtools/1.8/bin/ 
+parallel "srun --pty samtools sort /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/{}.bam -o /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}.sorted.bam" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214 
+parallel "srun --pty samtools index /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}.sorted.bam" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+parallel 'srun --pty samtools view -f 3 -h /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}.sorted.bam "TY1-I-LTR-cer:1-5249" "TY2-I-LTR-cer:1-5295" "TY3-I-LTR-cer:1-4671" "TY4-I-LTR-cer:1-5484" "TY5-I-LTR-cer:1-4874" "TY3-I-LTR-par:1-4674" "TY1-I-LTR-par:1-5250" "TY5-I-LTR-par:1-4674" "TY2-LTR-par" "TY4-LTR-par" > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_TY.sorted.bam' ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+parallel "srun --pty samtools view /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_TY.sorted.bam | cut -f1 | sort | uniq > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_read_names" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+cd /prg/picard-tools/2.23.2
+parallel "java -jar picard.jar FilterSamReads I=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}.sorted.bam O=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_TY.tot.sorted.bam READ_LIST_FILE=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_read_names FILTER=includeReadList" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+
+cd /prg/samtools/1.8/bin/
+parallel 'srun --pty samtools view -f 3 -h /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}.sorted.bam Scer_1	Scer_2	Scer_3	Scer_4	Scer_5	Scer_6	Scer_7	Scer_8	Scer_9	Scer_10	Scer_11	Scer_12	Scer_13	Scer_14	Scer_15	Scer_16	Spar_1	Spar_2	Spar_3	Spar_4	Spar_5	Spar_6	Spar_7	Spar_8	Spar_9	Spar_10	Spar_11	Spar_12	Spar_13	Spar_14	Spar_15	Spar_16 > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_rest2.sorted.bam' ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+parallel "srun --pty samtools view /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_rest2.sorted.bam | cut -f1 | sort | uniq > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_rest2_read_names" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+cd /prg/picard-tools/2.23.2
+parallel "java -jar picard.jar FilterSamReads I=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}.sorted.bam O=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_rest2.tot.sorted.bam READ_LIST_FILE=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_rest2_read_names FILTER=includeReadList" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+parallel "java -jar picard.jar GatherBamFiles I=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_rest2.tot.sorted.bam I=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_TY.tot.sorted.bam O=/home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_gathered2.TY.sorted.bam" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+
+cd /prg/samtools/1.8/bin/ 
+parallel "srun --pty samtools index /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_TY.tot.sorted.bam" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+parallel "srun --pty samtools depth -aa /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_TY.tot.sorted.bam > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_TY.tot.sorted.bed" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+parallel "srun --pty samtools index /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_gathered2.TY.sorted.bam" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+parallel "srun --pty samtools depth -a /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_gathered2.TY.sorted.bam > /home/madro269/schraiber2013/index_bowtie2_polyT_cer_par_conc/IGV/{}_gathered2.TY.sorted.bed" ::: SRR515220 SRR515221 SRR515222 SRR515223 SRR835213 SRR835214
+
+#########################################################################################################################################
+
+### Analysis of DS2 ###
+
+### 2.1 Download RNAseq data of Hovhannisyan et al. 2020 ###
+cd /home/madro269/sratoolkit.2.10.9-ubuntu64/bin 
+parallel "fastq-dump -I --split-files {} -O /home/madro269/data_RNAseq_Hovhan" ::: SRR10246851 SRR10246852 SRR10246853 SRR10246854 SRR10246855 SRR10246856 SRR10246857 SRR10246858 SRR10246859 SRR10246860 SRR10246861 SRR10246862 SRR10246863 SRR10246864 SRR10246865 SRR10246866 SRR10246867 SRR10246868
+
+### 2.2 Quality control and data filtering ###
+# 2.2.1 Quality control 
+# fastqc
+find /home/madro269/data_RNAseq_Hovhan/ -name "*.fastq" | parallel /prg/FastQC/0.11.8/fastqc -o /home/madro269/fastqc  
+# multiqc
+module load python/3.7 multiqc/1.9
+cd fastqc/ 
+/prg/python/3.7/bin/multiqc . 
+
+# 2.2.2 Adaptor trimming 
+for infile in /home/madro269/data_RNAseq_Hovhan/*_1.fastq 
+do
+  base=$(basename ${infile} _1.fastq) 
+  java -jar /prg/trimmomatic/0.36/trimmomatic-0.36.jar PE -phred33 ${infile} /home/madro269/data_RNAseq_Hovhan/${base}_2.fastq \   
+  /home/madro269/trim_Hovhan/${base}_1.trim.fastq /home/madro269/trim_Hovhan/${base}_1unpaired.trim.fastq \
+  /home/madro269/trim_Hovhan/${base}_2.trim.fastq /home/madro269/trim_Hovhan/${base}_2unpaired.trim.fastq \
+  ILLUMINACLIP:/prg/trimmomatic/0.36/adapters/TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
+done
+ 
+### 2.4 Preparation of reference genome sequences and annotations ###
+### 2.4.1 Genome sequences ###
+# Detect and mask interspersed repeats and low complexity DNA sequences (including TEs) by replacing them by Ns with RepeatMasker and our custom library of representative internal and LTR sequences of each Ty family library found in parental species ###
+cd /prg/RepeatMasker/4.1.0/ 
+srun --pty RepeatMasker --html --gff --lib /home/madro269/index_star/TEs_consensus_Carr_2012_Tsu4_Bay.fa /home/madro269/index_star/YPS128.genome.fa --dir /home/madro269/index_star/repeat.masker
+srun --pty RepeatMasker --html --gff --lib /home/madro269/index_star/TEs_consensus_Carr_2012_Tsu4_Bay.fa /home/madro269/index_star/Sbay_genome2.fa --dir /home/madro269/index_star/repeat.masker
+
+# Creation of concatenated hybrid reference genomes containing our custom Ty library
+cat /home/madro269/index_star/repeat.masker/YPS128.genome.fa.masked /home/madro269/index_star/TEs_consensus_Carr_2012_Tsu4_Bay.fa > /home/madro269/index_star/YPS128.genome.masked.TEs.fa
+cat /home/madro269/index_star/repeat.masker/Sbay_genome2.fa.masked /home/madro269/index_star/TEs_consensus_Carr_2012_Tsu4_Bay.fa > /home/madro269/index_star/Sbay.genome2.masked.TEs.fa
+sed -i "s/>Sbay_/>/g" /home/madro269/index_star/Sbay.genome3.masked.TEs.fa
+cat /home/madro269/index_star/YPS128.genome.masked.TEs.fa /home/madro269/index_star/Sbay.genome3.masked.TEs.fa > /home/madro269/index_star/YPS128.Sbay.concatenated.genome3.masked.TEs.fa
+# The second copy of Ty reference sequences were removed manually 
+
+### 2.4.2 Genome annotations ###
+# S. cerevisiae
+sed "s/X_element_partial/exon/g" YPS128.all_feature.gff | sed "s/X_element/exon/g" | sed "s/Y_prime_element/exon/g" | sed "s/centromere/exon/g" | sed "s/tRNA/exon/g" >YPS128_rebuilt.gff
+srun --pty gffread /home/madro269/index_star/YPS128_rebuilt.gff -T -o /home/madro269/index_star/YPS128_rebuilt.gtf
+cat /home/madro269/YPS128_rebuilt.gtf /home/madro269/schraiber2013/genome/Sbay_rebuilt.gtf > /home/madro269/YPS128_Sbay_rebuilt_concatenated_TEs.gtf 
+
+### 2.5 RNA-seq mapping with STAR ###
+
+# Index creation
+mkdir index_star12
+cd /prg/star/2.7.2b/bin/ 
+srun --pty STAR --runMode genomeGenerate --runThreadN 8 --genomeDir /home/madro269/index_star12 --genomeFastaFiles /home/madro269/index_star/YPS128.Sbay.concatenated.genome3.masked.TEs.fa --sjdbGTFfile /home/madro269/index_star/YPS128_Sbay_rebuilt_concatenated_TEs.gtf --outFileNamePrefix /home/madro269/index_star12/Hybride_results --genomeSAindexNbases 10 --sjdbOverhang 74
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246851_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246851_2.trim.fastq --outFileNamePrefix /home/madro269/star.hyb/map_51_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+
+#Alignment 
+cd /prg/star/2.7.2b/bin/ 
+# S. cerevisiae samples
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246855_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246855_2.trim.fastq --outFileNamePrefix /home/madro269/star.cer2/map_55_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000 
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246856_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246856_2.trim.fastq --outFileNamePrefix /home/madro269/star.cer2/map_56_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246857_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246857_2.trim.fastq --outFileNamePrefix /home/madro269/star.cer2/map_57_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246862_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246862_2.trim.fastq --outFileNamePrefix /home/madro269/star.cer2/map_62_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246863_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246863_2.trim.fastq --outFileNamePrefix /home/madro269/star.cer2/map_63_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246864_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246864_2.trim.fastq --outFileNamePrefix /home/madro269/star.cer2/map_64_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+# S. uvarum samples 
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246852_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246852_2.trim.fastq --outFileNamePrefix /home/madro269/star.uv2/map_52_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246853_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246853_2.trim.fastq --outFileNamePrefix /home/madro269/star.uv2/map_53_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246854_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246854_2.trim.fastq --outFileNamePrefix /home/madro269/star.uv2/map_54_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246859_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246859_2.trim.fastq --outFileNamePrefix /home/madro269/star.uv2/map_59_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246860_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246860_2.trim.fastq --outFileNamePrefix /home/madro269/star.uv2/map_60_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246861_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246861_2.trim.fastq --outFileNamePrefix /home/madro269/star.uv2/map_61_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+# Hybrid samples
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246851_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246851_2.trim.fastq --outFileNamePrefix /home/madro269/star.hyb/map_51_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246858_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246858_2.trim.fastq --outFileNamePrefix /home/madro269/star.hyb/map_58_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246865_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246865_2.trim.fastq --outFileNamePrefix /home/madro269/star.hyb/map_65_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246866_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246866_2.trim.fastq --outFileNamePrefix /home/madro269/star.hyb/map_66_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246867_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246867_2.trim.fastq --outFileNamePrefix /home/madro269/star.hyb/map_67_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
+srun --pty STAR --runThreadN 12 --genomeDir /home/madro269/index_star12 --readFilesIn /home/madro269/trim_Hovhan/SRR10246868_1.trim.fastq /home/madro269/trim_Hovhan/SRR10246868_2.trim.fastq --outFileNamePrefix /home/madro269/star.hyb/map_68_ --outSAMtype BAM Unsorted SortedByCoordinate --quantMode TranscriptomeSAM GeneCounts --limitBAMsortRAM 2000000000
